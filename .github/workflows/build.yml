@@ -1,0 +1,116 @@
+name: Maven Build and Deploy
+
+on:
+  push:
+    branches:
+      - 'master'
+      - 'feature/**'
+  pull_request:
+    branches:
+      - 'master'
+
+jobs:
+  Build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          submodules: 'recursive'
+
+      - name: Set up JDK 1.8
+        uses: actions/setup-java@v1
+        with:
+          java-version: 1.8
+
+      - name: Set up Maven
+        uses: stCarolas/setup-maven@v4.2
+        with:
+          maven-version: 3.6.1
+
+      - name: Create settings xml
+        uses: whelk-io/maven-settings-xml-action@v18
+        with:
+          servers: >
+            [
+              {
+                "id": "avio-repository",
+                "username": "dwouch@avioconsulting.com",
+                "password": "aXb61tbHMKA2RfPi"
+              },
+              {
+                "id": "exchange-repository",
+                "username": "~~~Token~~~",
+                "password": "${anypoint-exchange-token}"
+              }
+            ]
+          mirrors: >
+            [
+              {
+                "id": "avio-repository",
+                "mirrorOf": "mulesoft-ee-releases",
+                "url": "https://devops.avioconsulting.com/nexus/repository/mulesoft-ee-releases/"
+              }
+            ]
+
+      - name: Cache for maven dependencies
+        uses: actions/cache@v2
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: ${{ runner.os }}-maven
+
+      - name: Set Version
+        id: set-version
+        run: echo ::set-output name=version::$(mvn -q -Dexec.executable=echo -Dexec.args='${project.version}' --non-recursive exec:exec)
+
+      - name: Print Version
+        run: echo "Version ${{ steps.set-version.outputs.version }}"
+
+      - name: Compile
+        run: mvn compile
+
+      - name: Verify
+        run: mvn --batch-mode verify
+
+      # publish anything on master (including -SNAPSHOT)
+     # - name: Publish package
+     #   if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/master'}}
+     #   run: mvn --batch-mode deploy -DskipTests -X
+     #   env:
+     #     MAVEN_USERNAME: avioconsulting-devops
+     #     MAVEN_PASSWORD: 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
+
+      - name: Get Exchange Token
+        id: get-token
+        if: ${{ !contains(steps.set-version.outputs.version, 'SNAPSHOT') && github.event_name != 'pull_request' && github.ref == 'refs/heads/master'}}
+        run: |
+          echo ::set-output name=token::$(curl --location --request POST 'https://anypoint.mulesoft.com/accounts/api/v2/oauth2/token' --header 'Content-Type: application/x-www-form-urlencoded' --data-urlencode 'client_id=111732428f214973bb5875649228c96b' --data-urlencode 'client_secret=c5bBf454F6c44f22b4667c2Ef42c4b7d' --data-urlencode 'grant_type=client_credentials')
+
+      - name: Create pom for Exchange
+        if: ${{ !contains(steps.set-version.outputs.version, 'SNAPSHOT') && github.event_name != 'pull_request' && github.ref == 'refs/heads/master'}}
+        run: sed "s/<groupId>com.avioconsulting.mule<\/groupId>/<groupId>f2ea2cb4-c600-4bb5-88e8-e952ff5591ee<\/groupId>/" pom.xml > anypoint-pom.xml
+
+      - name: Publish Exchange Artifact
+        if: ${{ !contains(steps.set-version.outputs.version, 'SNAPSHOT') && github.event_name != 'pull_request' && github.ref == 'refs/heads/master'}}
+        run: mvn -f anypoint-pom.xml deploy -P exchange -Danypoint-exchange-token=${{ steps.get-token.outputs.token }}
+
+      - name: Perform Release
+        if: ${{ !contains(steps.set-version.outputs.version, 'SNAPSHOT') && github.event_name != 'pull_request' && github.ref == 'refs/heads/master'}}
+        run: echo "Releasing version ${{ steps.set-version.outputs.version }}"
+
+      - name: Perform Release
+        if: ${{ !contains(steps.set-version.outputs.version, 'SNAPSHOT') && github.event_name != 'pull_request' && github.ref == 'refs/heads/master'}}
+        env:
+          GIT_USER: avioconsulting-devops
+          GIT_PASSWORD: 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
+        run: |
+          git config --local credential.helper "!f() { echo username=\\GIT_USER; echo password=\\$GIT_PASSWORD; }; f"
+          git config --global user.email "dwouch@avioconsulting.com"
+          git config --global user.name "avioconsulting-devops"
+          git tag -a v${{ steps.set-version.outputs.version }} -m "Version ${{ steps.set-version.outputs.version }}"
+          mvn clean build-helper:parse-version versions:set -DnewVersion=\${parsedVersion.majorVersion}.\${parsedVersion.minorVersion}.\${parsedVersion.nextIncrementalVersion}-SNAPSHOT -DprocessAllModules versions:commit
+          find . -name 'pom.xml' | xargs git add
+          git commit -m "Incrementing to next SNAPSHOT patch version"
+          git push --follow-tags
+
