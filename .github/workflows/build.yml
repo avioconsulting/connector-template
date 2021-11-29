@@ -85,7 +85,7 @@ jobs:
         id: get-token
         if: ${{ !contains(steps.set-version.outputs.version, 'SNAPSHOT') && github.event_name != 'pull_request' && github.ref == 'refs/heads/master'}}
         run: |
-          echo ::set-output name=token::$(curl --location --request POST 'https://anypoint.mulesoft.com/accounts/api/v2/oauth2/token' --header 'Content-Type: application/x-www-form-urlencoded' --data-urlencode 'client_id=111732428f214973bb5875649228c96b' --data-urlencode 'client_secret=c5bBf454F6c44f22b4667c2Ef42c4b7d' --data-urlencode 'grant_type=client_credentials')
+          echo ::set-output name=token::$(curl --location --request POST 'https://anypoint.mulesoft.com/accounts/api/v2/oauth2/token' --header 'Content-Type: application/x-www-form-urlencoded' --data-urlencode 'client_id=${{secrets.ANYPOINT_EXCHANGE_CLIENT_ID}}' --data-urlencode 'client_secret=${{secrets.ANYPOINT_EXCHANGE_CLIENT_SECRET}}' --data-urlencode 'grant_type=client_credentials')
 
       - name: Create pom for Exchange
         if: ${{ !contains(steps.set-version.outputs.version, 'SNAPSHOT') && github.event_name != 'pull_request' && github.ref == 'refs/heads/master'}}
