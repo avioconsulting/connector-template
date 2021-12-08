@@ -34,22 +34,14 @@ jobs:
           servers: >
             [
               {
-                "id": "avio-repository",
-                "username": "dwouch@avioconsulting.com",
-                "password": "aXb61tbHMKA2RfPi"
+                "id": "github",
+                "username": "${{secrets.GIT_USER}}",
+                "password": "${{secrets.GIT_TOKEN}}"
               },
               {
-                "id": "exchange-repository",
+                "id": "anypoint-exchange",
                 "username": "~~~Token~~~",
-                "password": "${anypoint-exchange-token}"
-              }
-            ]
-          mirrors: >
-            [
-              {
-                "id": "avio-repository",
-                "mirrorOf": "mulesoft-ee-releases",
-                "url": "https://devops.avioconsulting.com/nexus/repository/mulesoft-ee-releases/"
+                "password": "${token}"
               }
             ]
 
@@ -73,13 +65,12 @@ jobs:
       - name: Verify
         run: mvn --batch-mode verify
 
-      # publish anything on master (including -SNAPSHOT)
-     # - name: Publish package
-     #   if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/master'}}
-     #   run: mvn --batch-mode deploy -DskipTests -X
-     #   env:
-     #     MAVEN_USERNAME: avioconsulting-devops
-     #     MAVEN_PASSWORD: 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
+      - name: Publish Unit Test Results
+        uses: EnricoMi/publish-unit-test-result-action@v1
+        if: always()
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          files: ./**/surefire-reports/*.xml
 
       - name: Get Exchange Token
         id: get-token
@@ -87,13 +78,9 @@ jobs:
         run: |
           echo ::set-output name=token::$(curl --location --request POST 'https://anypoint.mulesoft.com/accounts/api/v2/oauth2/token' --header 'Content-Type: application/x-www-form-urlencoded' --data-urlencode 'client_id=${{secrets.ANYPOINT_EXCHANGE_CLIENT_ID}}' --data-urlencode 'client_secret=${{secrets.ANYPOINT_EXCHANGE_CLIENT_SECRET}}' --data-urlencode 'grant_type=client_credentials')
 
-      - name: Create pom for Exchange
-        if: ${{ !contains(steps.set-version.outputs.version, 'SNAPSHOT') && github.event_name != 'pull_request' && github.ref == 'refs/heads/master'}}
-        run: sed "s/<groupId>com.avioconsulting.mule<\/groupId>/<groupId>f2ea2cb4-c600-4bb5-88e8-e952ff5591ee<\/groupId>/" pom.xml > anypoint-pom.xml
-
       - name: Publish Exchange Artifact
         if: ${{ !contains(steps.set-version.outputs.version, 'SNAPSHOT') && github.event_name != 'pull_request' && github.ref == 'refs/heads/master'}}
-        run: mvn -f anypoint-pom.xml deploy -P exchange -Danypoint-exchange-token=${{ steps.get-token.outputs.token }}
+        run: ./deploy-to-exchange.sh ${{ secrets.ANYPOINT_ORG_ID }} ${{ fromJson(steps.get-token.outputs.token).access_token }}
 
       - name: Perform Release
         if: ${{ !contains(steps.set-version.outputs.version, 'SNAPSHOT') && github.event_name != 'pull_request' && github.ref == 'refs/heads/master'}}
@@ -102,15 +89,24 @@ jobs:
       - name: Perform Release
         if: ${{ !contains(steps.set-version.outputs.version, 'SNAPSHOT') && github.event_name != 'pull_request' && github.ref == 'refs/heads/master'}}
         env:
-          GIT_USER: avioconsulting-devops
-          GIT_PASSWORD: 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
+          GIT_USER: ${{ secrets.GIT_USER }}
+          GIT_PASSWORD: ${{ secrets.GIT_TOKEN }}
         run: |
           git config --local credential.helper "!f() { echo username=\\GIT_USER; echo password=\\$GIT_PASSWORD; }; f"
-          git config --global user.email "dwouch@avioconsulting.com"
-          git config --global user.name "avioconsulting-devops"
+          git config --global user.email "${{ secrets.GIT_EMAIL }}"
+          git config --global user.name "${{ secrets.GIT_USER }}"
           git tag -a v${{ steps.set-version.outputs.version }} -m "Version ${{ steps.set-version.outputs.version }}"
           mvn clean build-helper:parse-version versions:set -DnewVersion=\${parsedVersion.majorVersion}.\${parsedVersion.minorVersion}.\${parsedVersion.nextIncrementalVersion}-SNAPSHOT -DprocessAllModules versions:commit
           find . -name 'pom.xml' | xargs git add
           git commit -m "Incrementing to next SNAPSHOT patch version"
           git push --follow-tags
-
+      
+      - name: Add Release Note and Create Github Release
+        if: ${{ !contains(steps.set-version.outputs.version, 'SNAPSHOT') && github.event_name != 'pull_request' && github.ref == 'refs/heads/master'}}
+        uses: release-drafter/release-drafter@v5
+        with:
+          version: ${{ steps.set-version.outputs.version }}
+          tag: v${{ steps.set-version.outputs.version }}
+          publish: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
